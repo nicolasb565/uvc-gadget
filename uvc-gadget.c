@@ -467,7 +467,7 @@ static void v4l2_uninit_device()
 static void uvc_uninit_device()
 {
     unsigned int i;
-    if (settings.source_device == DEVICE_TYPE_FRAMEBUFFER && uvc_dev.dummy_buf) {
+    if ((settings.source_device == DEVICE_TYPE_FRAMEBUFFER || settings.source_device == DEVICE_TYPE_FILE) && uvc_dev.dummy_buf) {
         printf("%s: Uninit device\n", uvc_dev.device_type_name);
 
         for (i = 0; i < uvc_dev.nbufs; ++i) {
@@ -589,7 +589,7 @@ static int v4l2_reqbufs_mmap(struct v4l2_device * dev, struct v4l2_requestbuffer
         }
 
         dev->mem[i].length = dev->mem[i].buf.length;
-        printf("%s: Buffer %u mapped at address %p, length %d.\n",
+        printf("%s: Buffer %u mapped at address %p, length %zd.\n",
             dev->device_type_name, i, dev->mem[i].start, dev->mem[i].length);
     }
 
@@ -606,7 +606,7 @@ static int v4l2_reqbufs_userptr(struct v4l2_device * dev, struct v4l2_requestbuf
     unsigned int payload_size;
     unsigned int i;
 
-    if (dev->device_type == DEVICE_TYPE_UVC && settings.source_device == DEVICE_TYPE_FRAMEBUFFER) {
+    if (dev->device_type == DEVICE_TYPE_UVC && (settings.source_device == DEVICE_TYPE_FRAMEBUFFER || settings.source_device == DEVICE_TYPE_FILE)) {
         /* Allocate buffers to hold dummy data pattern. */
         dev->dummy_buf = calloc(req.count, sizeof dev->dummy_buf[0]);
         if (!dev->dummy_buf) {
@@ -614,8 +614,11 @@ static int v4l2_reqbufs_userptr(struct v4l2_device * dev, struct v4l2_requestbuf
             return -ENOMEM;
         }
 
-        payload_size = fb_dev.fb_width * fb_dev.fb_height * 2;
-
+        if(settings.source_device == DEVICE_TYPE_FRAMEBUFFER)
+            payload_size = fb_dev.fb_width * fb_dev.fb_height * 2;
+        else if (settings.source_device == DEVICE_TYPE_FILE)
+            payload_size = 4147200;
+            
         for (i = 0; i < req.count; ++i) {
             dev->dummy_buf[i].length = payload_size;
             dev->dummy_buf[i].start  = malloc(payload_size);
@@ -661,7 +664,7 @@ static int v4l2_reqbufs(struct v4l2_device * dev, int nbufs)
         }
     }
 
-    if (dev->memory_type == V4L2_MEMORY_USERPTR && settings.source_device == DEVICE_TYPE_FRAMEBUFFER) {
+    if (dev->memory_type == V4L2_MEMORY_USERPTR) {
         if (req.count < 2) {
             printf("%s: Insufficient buffer memory.\n", dev->device_type_name);
             return -EINVAL;
@@ -694,7 +697,7 @@ static int uvc_video_qbuf()
     unsigned int i;
     int ret;
 
-    if (settings.source_device == DEVICE_TYPE_FRAMEBUFFER) {
+    if (settings.source_device == DEVICE_TYPE_FRAMEBUFFER || settings.source_device == DEVICE_TYPE_FILE) {
         for (i = 0; i < uvc_dev.nbufs; ++i) {
             struct v4l2_buffer buf;
 
@@ -707,7 +710,8 @@ static int uvc_video_qbuf()
 
             ret = ioctl(uvc_dev.fd, VIDIOC_QBUF, &buf);
             if (ret < 0) {
-                printf("UVC: VIDIOC_QBUF failed : %s (%d).\n", strerror(errno), errno);
+                printf("UVC: VIDIOC_QBUF failed (USERPTR) : %s (%d).\n", strerror(errno), errno);
+                printf("m_userpr: %lu length: %d index: %d\n", buf.m.userptr, buf.length, buf.index);
                 return ret;
             }
 
@@ -731,7 +735,7 @@ static int v4l2_qbuf_mmap(struct v4l2_device * dev)
 
         ret = ioctl(dev->fd, VIDIOC_QBUF, &(dev->mem[i].buf));
         if (ret < 0) {
-            printf("%s: VIDIOC_QBUF failed : %s (%d).\n",
+            printf("%s: VIDIOC_QBUF failed (MMAP) : %s (%d).\n",
                 dev->device_type_name, strerror(errno), errno);
 
             return ret;
@@ -1171,6 +1175,56 @@ static void uvc_fb_video_process()
     }
 }
 
+static void uvc_filesrc_video_process()
+{
+    struct v4l2_buffer ubuf;
+    /*
+     * Return immediately if UVC video output device has not started
+     * streaming yet.
+     */
+    if (!uvc_dev.is_streaming) {
+        return;
+    }
+    
+    /* Prepare a v4l2 buffer to be dequeued from UVC domain. */
+    CLEAR(ubuf);
+    ubuf.type   = uvc_dev.buffer_type;
+    ubuf.memory = uvc_dev.memory_type;
+    ubuf.m.userptr = (unsigned long) uvc_dev.mem[ubuf.index].start;
+    ubuf.length    = uvc_dev.mem[ubuf.index].length;
+
+    if (ioctl(uvc_dev.fd, VIDIOC_DQBUF, &ubuf) < 0) {
+        printf("%s: Unable to dequeue buffer: %s (%d).\n",
+            uvc_dev.device_type_name, strerror(errno), errno);
+        return;
+    }
+    
+    FILE* fd = fopen(settings.filepath, "r");
+    if(fd) {
+        fseek(fd, 0, SEEK_END);
+        long fsize = ftell(fd);
+        fseek(fd, 0, SEEK_SET);
+        fsize = fread(uvc_dev.mem[ubuf.index].start, 1, fsize, fd);
+        fclose(fd);
+        ubuf.bytesused = fsize;
+    } else {
+        ubuf.bytesused = 0;
+        printf("could not open srcfile for reading\n");
+    }
+
+    if (ioctl(uvc_dev.fd, VIDIOC_QBUF, &ubuf) < 0) {
+        printf("%s: Unable to queue buffer: %s (%d).\n",
+            uvc_dev.device_type_name, strerror(errno), errno);
+        return;
+    }
+
+    uvc_dev.qbuf_count++;
+
+    if (settings.show_fps) {
+        uvc_dev.buffers_processed++;
+    }
+}
+
 static void uvc_v4l2_video_process()
 {
     struct v4l2_buffer ubuf;
@@ -1261,6 +1315,14 @@ static void uvc_handle_streamon_event()
         uvc_video_stream(STREAM_ON);
         settings.blink_on_startup = 0;
         streaming_status_value(uvc_dev.is_streaming);
+    } else if(settings.source_device == DEVICE_TYPE_FILE) {
+        if (uvc_video_qbuf() < 0) {
+            return;
+        }
+    
+        uvc_video_stream(STREAM_ON);
+        settings.blink_on_startup = 0;
+        streaming_status_value(uvc_dev.is_streaming);
     }
 }
 
@@ -1274,6 +1336,10 @@ static void uvc_handle_streamoff_event()
 
     if (settings.source_device == DEVICE_TYPE_FRAMEBUFFER) {
         fb_mmap_close();
+        uvc_uninit_device();
+    }
+    
+    if (settings.source_device == DEVICE_TYPE_FILE) {
         uvc_uninit_device();
     }
 
@@ -1947,6 +2013,79 @@ static void processing_loop_fb_uvc()
     }
 }
 
+static void processing_loop_filesrc_uvc()
+{
+    struct timeval video_tv;
+    int activity;
+    double next_frame_time = 0;
+    double last_time_blink = 0;
+    bool blink_state = false;
+    double now;
+    fd_set fdsu;
+
+    int frame_interval = (1000 / settings.fb_framerate) / 1.2;
+
+    printf("PROCESSING LOOP: FILE -> UVC\n");
+
+    while (!terminate) {
+        FD_ZERO(&fdsu);
+        FD_SET(uvc_dev.fd, &fdsu);
+
+        fd_set efds = fdsu;
+        fd_set dfds = fdsu;
+
+        nanosleep ((const struct timespec[]) { {0, 1000000L} }, NULL);
+
+        activity = select(uvc_dev.fd + 1, NULL, &dfds, &efds, NULL);
+
+        if (activity == -1) {
+            printf("PROCESSING: Select error %d, %s\n", errno, strerror(errno));
+            if (EINTR == errno) {
+                continue;
+            }
+            break;
+        }
+
+        if (activity == 0) {
+            printf("PROCESSING: Select timeout\n");
+            break;
+        }
+
+        if (FD_ISSET(uvc_dev.fd, &efds)) {
+            uvc_events_process();
+        }
+
+        gettimeofday(&video_tv, 0);
+        now = (video_tv.tv_sec + (video_tv.tv_usec * 1e-6)) * 1000;
+
+        if (FD_ISSET(uvc_dev.fd, &dfds)) {
+            if (now >= next_frame_time) {
+                uvc_filesrc_video_process();
+                next_frame_time = now + frame_interval;
+            }
+        }
+
+        if (settings.show_fps) {
+            if (now - uvc_dev.last_time_video_process >= 1000) {
+                printf("FPS: %d\n", uvc_dev.buffers_processed);
+                uvc_dev.buffers_processed = 0;
+                uvc_dev.last_time_video_process = now;
+            }
+        }
+
+        if (settings.blink_on_startup > 0) {
+            if (now - last_time_blink >= 100) {
+                blink_state = !(blink_state);
+                streaming_status_value(blink_state);
+                last_time_blink = now;
+                if (!blink_state) {
+                    settings.blink_on_startup -= 1;
+                }
+            }
+        }
+    }
+}
+
 static int init()
 {
     int ret;
@@ -1969,6 +2108,9 @@ static int init()
             goto err;
         }
 
+    } else if (settings.source_device == DEVICE_TYPE_FILE) {
+        printf("FILESRC: Path is %s\n", settings.filepath);
+        file_dev.device_type = DEVICE_TYPE_FILE;
     } else {
         /* Open the V4L2 device. */
         ret = v4l2_open(settings.v4l2_devname, settings.nbufs);
@@ -1988,6 +2130,8 @@ static int init()
 
     if (settings.source_device == DEVICE_TYPE_FRAMEBUFFER) {
         processing_loop_fb_uvc();
+    } else if (settings.source_device == DEVICE_TYPE_FILE) {
+        processing_loop_filesrc_uvc();
     } else {
         processing_loop_v4l2_uvc();
     } 
@@ -2248,6 +2392,7 @@ static void usage(const char * argv0)
     fprintf(stderr, "Available options are\n");
     fprintf(stderr, " -b value    Blink X times on startup (b/w 1 and 20 with led0 or GPIO pin if defined)\n");
     fprintf(stderr, " -f device   Framebuffer device\n");
+    fprintf(stderr, " -F file     Read from file\n");
     fprintf(stderr, " -h          Print this help screen and exit\n");
     fprintf(stderr, " -l          Use onboard led0 for streaming status indication\n");
     fprintf(stderr, " -n value    Number of Video buffers (b/w 2 and 32)\n");
@@ -2277,6 +2422,8 @@ static void show_settings()
         printf("SETTINGS: FB device name: %s\n", settings.fb_devname);
         printf("SETTINGS: Framerate for frame buffer: %d\n", settings.fb_framerate);
 
+    } else if (settings.source_device == DEVICE_TYPE_FILE) {
+        printf("SETTINGS: FILE source: %s\n", settings.filepath);
     } else {
         printf("SETTINGS: V4L2 device name: %s\n", settings.v4l2_devname);
     }
@@ -2299,7 +2446,7 @@ int main(int argc, char * argv[])
         return 1;
     }
 
-    while ((opt = getopt(argc, argv, "hlb:f:n:p:r:u:v:x")) != -1) {
+    while ((opt = getopt(argc, argv, "hlb:f:F:n:p:r:s:u:v:x")) != -1) {
         switch (opt) {
         case 'b':
             if (atoi(optarg) < 1 || atoi(optarg) > 20) {
@@ -2312,6 +2459,11 @@ int main(int argc, char * argv[])
         case 'f':
             settings.fb_devname = optarg;
             settings.source_device = DEVICE_TYPE_FRAMEBUFFER;
+            break;
+            
+        case 'F':
+            settings.filepath = optarg;
+            settings.source_device = DEVICE_TYPE_FILE;
             break;
 
         case 'h':

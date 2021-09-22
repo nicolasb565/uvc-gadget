@@ -19,6 +19,7 @@ If you want to build it yourself, then here is a place for you.
     Available options are
         -b value       Blink X times on startup (b/w 1 and 20 with led0 or GPIO pin if defined)
         -f device      Framebuffer device
+        -F file        Read from file        
         -h             Print this help screen and exit
         -l             Use onboard led0 for streaming status indication
         -n value       Number of Video buffers (b/w 2 and 32)

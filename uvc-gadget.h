@@ -164,6 +164,7 @@ enum device_type {
     DEVICE_TYPE_UVC,
     DEVICE_TYPE_V4L2,
     DEVICE_TYPE_FRAMEBUFFER,
+    DEVICE_TYPE_FILE
 };
 
 /* Represents a V4L2 based video capture device */
@@ -215,11 +216,13 @@ struct v4l2_device {
 static struct v4l2_device v4l2_dev;
 static struct v4l2_device uvc_dev;
 static struct v4l2_device fb_dev;
+static struct v4l2_device file_dev;
 
 struct uvc_settings {
     char * uvc_devname;
     char * v4l2_devname;
     char * fb_devname;
+    char * filepath;
     enum device_type source_device;
     unsigned int nbufs;
     bool show_fps;
