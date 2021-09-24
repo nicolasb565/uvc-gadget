@@ -1177,6 +1177,7 @@ static void uvc_fb_video_process()
 
 static void uvc_filesrc_video_process()
 {
+	static nbr_of_consecutive_dqbuf_failures = 0;
     struct v4l2_buffer ubuf;
     /*
      * Return immediately if UVC video output device has not started
@@ -1194,10 +1195,19 @@ static void uvc_filesrc_video_process()
     ubuf.length    = uvc_dev.mem[ubuf.index].length;
 
     if (ioctl(uvc_dev.fd, VIDIOC_DQBUF, &ubuf) < 0) {
+		nbr_of_consecutive_dqbuf_failures++;
         printf("%s: Unable to dequeue buffer: %s (%d).\n",
             uvc_dev.device_type_name, strerror(errno), errno);
+        if(nbr_of_consecutive_dqbuf_failures > 5) {
+			uvc_uninit_device();
+		    uvc_close();
+		    exit(1);
+		}
         return;
     }
+    else {
+		nbr_of_consecutive_dqbuf_failures = 0;
+	}
     
     FILE* fd = fopen(settings.filepath, "r");
     if(fd) {
