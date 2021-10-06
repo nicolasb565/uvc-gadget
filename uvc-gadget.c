@@ -1175,9 +1175,10 @@ static void uvc_fb_video_process()
     }
 }
 
+static void uvc_handle_streamoff_event();
+
 static void uvc_filesrc_video_process()
 {
-	static nbr_of_consecutive_dqbuf_failures = 0;
     struct v4l2_buffer ubuf;
     /*
      * Return immediately if UVC video output device has not started
@@ -1195,19 +1196,16 @@ static void uvc_filesrc_video_process()
     ubuf.length    = uvc_dev.mem[ubuf.index].length;
 
     if (ioctl(uvc_dev.fd, VIDIOC_DQBUF, &ubuf) < 0) {
-		nbr_of_consecutive_dqbuf_failures++;
         printf("%s: Unable to dequeue buffer: %s (%d).\n",
             uvc_dev.device_type_name, strerror(errno), errno);
-        if(nbr_of_consecutive_dqbuf_failures > 5) {
-			uvc_uninit_device();
-		    uvc_close();
-		    exit(1);
-		}
         return;
     }
-    else {
-		nbr_of_consecutive_dqbuf_failures = 0;
-	}
+    
+    if(ubuf.flags & V4L2_BUF_FLAG_ERROR) {
+        uvc_handle_streamoff_event();
+        printf("UVC: Possible USB shutdown requested from Host, seen during VIDIOC_DQBUF\n");
+        return;
+    }
     
     FILE* fd = fopen(settings.filepath, "r");
     if(fd) {
@@ -1225,6 +1223,10 @@ static void uvc_filesrc_video_process()
     if (ioctl(uvc_dev.fd, VIDIOC_QBUF, &ubuf) < 0) {
         printf("%s: Unable to queue buffer: %s (%d).\n",
             uvc_dev.device_type_name, strerror(errno), errno);
+        if (errno == ENODEV) {
+            uvc_handle_streamoff_event();
+            printf("UVC: Possible USB shutdown requested from Host, seen during VIDIOC_QBUF\n");
+        }
         return;
     }
 
