@@ -483,6 +483,7 @@ static int v4l2_video_stream_control(struct v4l2_device * dev, enum video_stream
 {
     int type = dev->buffer_type;
     int ret;
+    int fd;
 
     if (action == STREAM_ON) {
         ret = ioctl(dev->fd, VIDIOC_STREAMON, &type);
@@ -494,7 +495,10 @@ static int v4l2_video_stream_control(struct v4l2_device * dev, enum video_stream
         printf("%s: STREAM ON success\n", dev->device_type_name);
         dev->is_streaming = 1;
         uvc_shutdown_requested = false;
-
+        fd = open("/tmp/uvc-gadget-streaming", O_WRONLY | O_CREAT, 0644);
+        if (fd != -1) {
+            close(fd);
+        }
     } else if (dev->is_streaming) {
         ret = ioctl(dev->fd, VIDIOC_STREAMOFF, &type);
         if (ret < 0) {
@@ -504,6 +508,7 @@ static int v4l2_video_stream_control(struct v4l2_device * dev, enum video_stream
 
         printf("%s: STREAM OFF success\n", dev->device_type_name);
         dev->is_streaming = 0;
+        remove("/tmp/uvc-gadget-streaming");
     }
     return 0;
 }
