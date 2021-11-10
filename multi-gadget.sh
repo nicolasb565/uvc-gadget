@@ -17,10 +17,10 @@ mkdir $GADGET_PATH/strings/0x409
 echo 100000000d2386db > $GADGET_PATH/strings/0x409/serialnumber
 echo "Samsung" > $GADGET_PATH/strings/0x409/manufacturer
 echo "PI4 USB Device" > $GADGET_PATH/strings/0x409/product
-mkdir $GADGET_PATH/configs/c.2
-mkdir $GADGET_PATH/configs/c.2/strings/0x409
-echo 500 > $GADGET_PATH/configs/c.2/MaxPower
-echo "UVC" > $GADGET_PATH/configs/c.2/strings/0x409/configuration
+mkdir $GADGET_PATH/configs/c.1
+mkdir $GADGET_PATH/configs/c.1/strings/0x409
+echo 500 > $GADGET_PATH/configs/c.1/MaxPower
+echo "UVC" > $GADGET_PATH/configs/c.1/strings/0x409/configuration
 
 mkdir $GADGET_PATH/functions/uvc.usb0
 mkdir $GADGET_PATH/functions/acm.usb0
@@ -82,8 +82,8 @@ cd ../../class/hs
 ln -s ../../header/h
 cd ../../../../..
 
-ln -s $GADGET_PATH/functions/uvc.usb0 $GADGET_PATH/configs/c.2/uvc.usb0
-ln -s $GADGET_PATH/functions/acm.usb0 $GADGET_PATH/configs/c.2/acm.usb0
+ln -s $GADGET_PATH/functions/uvc.usb0 $GADGET_PATH/configs/c.1/uvc.usb0
+ln -s $GADGET_PATH/functions/acm.usb0 $GADGET_PATH/configs/c.1/acm.usb0
 udevadm settle -t 5 || :
 ls /sys/class/udc > $GADGET_PATH/UDC
 
