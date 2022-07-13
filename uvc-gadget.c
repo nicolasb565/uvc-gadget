@@ -2039,8 +2039,10 @@ static void processing_loop_filesrc_uvc()
     bool blink_state = false;
     double now;
     fd_set fdsu;
+    struct stat attr_previous = {0};
+    struct stat attr = {0};
 
-    int frame_interval = (1000 / settings.fb_framerate) / 1.2;
+    int frame_interval = (1000 / 15);
 
     printf("PROCESSING LOOP: FILE -> UVC\n");
 
@@ -2071,33 +2073,17 @@ static void processing_loop_filesrc_uvc()
         if (FD_ISSET(uvc_dev.fd, &efds)) {
             uvc_events_process();
         }
+        
+        stat(settings.filepath, &attr);
 
         gettimeofday(&video_tv, 0);
         now = (video_tv.tv_sec + (video_tv.tv_usec * 1e-6)) * 1000;
 
         if (FD_ISSET(uvc_dev.fd, &dfds)) {
-            if (now >= next_frame_time) {
+            if (now >= next_frame_time || attr.st_ino != attr_previous.st_ino) {
+                memcpy(&attr_previous, &attr, sizeof(attr));
                 uvc_filesrc_video_process();
                 next_frame_time = now + frame_interval;
-            }
-        }
-
-        if (settings.show_fps) {
-            if (now - uvc_dev.last_time_video_process >= 1000) {
-                printf("FPS: %d\n", uvc_dev.buffers_processed);
-                uvc_dev.buffers_processed = 0;
-                uvc_dev.last_time_video_process = now;
-            }
-        }
-
-        if (settings.blink_on_startup > 0) {
-            if (now - last_time_blink >= 100) {
-                blink_state = !(blink_state);
-                streaming_status_value(blink_state);
-                last_time_blink = now;
-                if (!blink_state) {
-                    settings.blink_on_startup -= 1;
-                }
             }
         }
     }
