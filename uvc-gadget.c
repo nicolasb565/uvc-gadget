@@ -2442,6 +2442,7 @@ int main(int argc, char * argv[])
     action.sa_handler = term;
     sigaction(SIGTERM, &action, NULL);
     sigaction(SIGINT, &action, NULL);
+    setbuf(stdout, NULL); //disable buffering on stdout to get logs immediately with journalctl
 
     ret = configfs_get_uvc_settings();
     if (ret < 0) {
