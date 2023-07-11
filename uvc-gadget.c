@@ -495,8 +495,15 @@ static int v4l2_video_stream_control(struct v4l2_device * dev, enum video_stream
         printf("%s: STREAM ON success\n", dev->device_type_name);
         dev->is_streaming = 1;
         uvc_shutdown_requested = false;
-        fd = open("/tmp/uvc-gadget-streaming", O_WRONLY | O_CREAT, 0644);
+        fd = open("/tmp/uvc-gadget-streaming", O_WRONLY | O_CREAT | O_NONBLOCK, 0644);
         if (fd != -1) {
+            struct v4l2_format fmt;
+            CLEAR(fmt);
+            fmt.type = dev->buffer_type;
+            ioctl(dev->fd, VIDIOC_G_FMT, &fmt);
+            uint32_t width = fmt.fmt.pix.width;
+            uint32_t height = fmt.fmt.pix.height;
+            dprintf(fd, "%ux%u ", width, height);
             close(fd);
         }
     } else if (dev->is_streaming) {
@@ -1212,17 +1219,56 @@ static void uvc_filesrc_video_process()
         return;
     }
     
-    FILE* fd = fopen(settings.filepath, "r");
-    if(fd) {
-        fseek(fd, 0, SEEK_END);
-        long fsize = ftell(fd);
-        fseek(fd, 0, SEEK_SET);
-        fsize = fread(uvc_dev.mem[ubuf.index].start, 1, fsize, fd);
-        fclose(fd);
-        ubuf.bytesused = fsize;
-    } else {
+    int fdAck = open("/tmp/uvc-gadget-streaming.ack", O_RDONLY | O_NONBLOCK, 0644);
+    int formatOk = 0;
+    if(fdAck == -1) {
+        printf("could not open desired format ack file\n");
+    }
+    else {
+        struct v4l2_format fmt;
+        CLEAR(fmt);
+        fmt.type = uvc_dev.buffer_type;
+        ioctl(uvc_dev.fd, VIDIOC_G_FMT, &fmt);
+        uint32_t desired_width = fmt.fmt.pix.width;
+        uint32_t desired_height = fmt.fmt.pix.height;
+        
+        char formatStr[12];
+        ssize_t sizeRead = read(fdAck, formatStr, 12);
+        if(sizeRead >= 9) {
+            char *widthStr, *heightStr, *saveptr;
+            widthStr = strtok_r(formatStr, "x", &saveptr);
+            heightStr = strtok_r(NULL, "x", &saveptr);
+            if(widthStr && heightStr) {
+                unsigned long width = strtoul(widthStr, NULL, 10);
+                unsigned long height = strtoul(heightStr, NULL, 10);
+                if(desired_width == width && desired_height == height)
+                    formatOk = 1;
+                else {
+                    printf("desired_width => %u desired_height => %u width => %u height => %u\n", desired_width, desired_height, width, height);
+                }
+            }
+        }
+        
+        close(fdAck);
+    }
+    
+    if(formatOk) {
+        FILE* fd = fopen(settings.filepath, "r");
+        if(fd) {
+            fseek(fd, 0, SEEK_END);
+            long fsize = ftell(fd);
+            fseek(fd, 0, SEEK_SET);
+            fsize = fread(uvc_dev.mem[ubuf.index].start, 1, fsize, fd);
+            fclose(fd);
+            ubuf.bytesused = fsize;
+        } else {
+            ubuf.bytesused = 0;
+            printf("could not open srcfile for reading\n");
+        }
+    }
+    else {
         ubuf.bytesused = 0;
-        printf("could not open srcfile for reading\n");
+        printf("desired format has not been acknowledged\n");
     }
 
     if (ioctl(uvc_dev.fd, VIDIOC_QBUF, &ubuf) < 0) {
