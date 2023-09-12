@@ -1189,7 +1189,7 @@ static void uvc_fb_video_process()
 
 static void uvc_handle_streamoff_event();
 
-static void uvc_filesrc_video_process()
+static void uvc_filesrc_video_process(const char* filepath)
 {
     struct v4l2_buffer ubuf;
     /*
@@ -1199,7 +1199,7 @@ static void uvc_filesrc_video_process()
     if (!uvc_dev.is_streaming) {
         return;
     }
-    
+
     /* Prepare a v4l2 buffer to be dequeued from UVC domain. */
     CLEAR(ubuf);
     ubuf.type   = uvc_dev.buffer_type;
@@ -1212,13 +1212,13 @@ static void uvc_filesrc_video_process()
             uvc_dev.device_type_name, strerror(errno), errno);
         return;
     }
-    
+
     if(ubuf.flags & V4L2_BUF_FLAG_ERROR) {
         uvc_handle_streamoff_event();
         printf("UVC: Possible USB shutdown requested from Host, seen during VIDIOC_DQBUF\n");
         return;
     }
-    
+
     int fdAck = open("/tmp/uvc-gadget-streaming.ack", O_RDONLY | O_NONBLOCK, 0644);
     int formatOk = 0;
     if(fdAck == -1) {
@@ -1231,7 +1231,7 @@ static void uvc_filesrc_video_process()
         ioctl(uvc_dev.fd, VIDIOC_G_FMT, &fmt);
         uint32_t desired_width = fmt.fmt.pix.width;
         uint32_t desired_height = fmt.fmt.pix.height;
-        
+
         char formatStr[12];
         ssize_t sizeRead = read(fdAck, formatStr, 12);
         if(sizeRead >= 9) {
@@ -1244,22 +1244,23 @@ static void uvc_filesrc_video_process()
                 if(desired_width == width && desired_height == height)
                     formatOk = 1;
                 else {
-                    printf("desired_width => %u desired_height => %u width => %u height => %u\n", desired_width, desired_height, width, height);
+                    printf("desired_width => %u desired_height => %u width => %lu height => %lu\n", desired_width, desired_height, width, height);
                 }
             }
         }
-        
+
         close(fdAck);
     }
-    
+
     if(formatOk) {
-        FILE* fd = fopen(settings.filepath, "r");
+        FILE* fd = fopen(filepath, "r");
         if(fd) {
             fseek(fd, 0, SEEK_END);
             long fsize = ftell(fd);
             fseek(fd, 0, SEEK_SET);
             fsize = fread(uvc_dev.mem[ubuf.index].start, 1, fsize, fd);
             fclose(fd);
+            unlink(filepath);
             ubuf.bytesused = fsize;
         } else {
             ubuf.bytesused = 0;
@@ -1282,7 +1283,7 @@ static void uvc_filesrc_video_process()
     }
 
     uvc_dev.qbuf_count++;
-
+    
     if (settings.show_fps) {
         uvc_dev.buffers_processed++;
     }
@@ -2078,31 +2079,17 @@ static void processing_loop_fb_uvc()
 
 static void processing_loop_filesrc_uvc()
 {
-    struct timeval video_tv;
+    static int tripleBufferingIndex = 0;
     int activity;
-    double next_frame_time = 0;
-    double last_time_blink = 0;
-    bool blink_state = false;
-    double now;
     fd_set fdsu;
-    struct stat attr_previous = {0};
-    struct stat attr = {0};
-
-    int frame_interval = (1000 / 15);
-
     printf("PROCESSING LOOP: FILE -> UVC\n");
-
     while (!terminate) {
         FD_ZERO(&fdsu);
         FD_SET(uvc_dev.fd, &fdsu);
-
         fd_set efds = fdsu;
         fd_set dfds = fdsu;
-
         nanosleep ((const struct timespec[]) { {0, 1000000L} }, NULL);
-
         activity = select(uvc_dev.fd + 1, NULL, &dfds, &efds, NULL);
-
         if (activity == -1) {
             printf("PROCESSING: Select error %d, %s\n", errno, strerror(errno));
             if (EINTR == errno) {
@@ -2110,7 +2097,7 @@ static void processing_loop_filesrc_uvc()
             }
             break;
         }
-
+        
         if (activity == 0) {
             printf("PROCESSING: Select timeout\n");
             break;
@@ -2120,17 +2107,23 @@ static void processing_loop_filesrc_uvc()
             uvc_events_process();
         }
         
-        stat(settings.filepath, &attr);
-
-        gettimeofday(&video_tv, 0);
-        now = (video_tv.tv_sec + (video_tv.tv_usec * 1e-6)) * 1000;
-
         if (FD_ISSET(uvc_dev.fd, &dfds)) {
-            if (now >= next_frame_time || attr.st_ino != attr_previous.st_ino) {
-                memcpy(&attr_previous, &attr, sizeof(attr));
-                uvc_filesrc_video_process();
-                next_frame_time = now + frame_interval;
+            struct stat attr;
+            int ready = 0;
+            char filePathTripleBuffering[256];
+            sprintf(filePathTripleBuffering, "%s%d", settings.filepath, tripleBufferingIndex);
+            if(stat(filePathTripleBuffering, &attr) == 0) {
+                ready = 1;
             }
+            if(ready) {
+                uvc_filesrc_video_process(filePathTripleBuffering);
+            }
+            if(tripleBufferingIndex == 0)
+                tripleBufferingIndex = 1;
+            else if(tripleBufferingIndex == 1)
+                tripleBufferingIndex = 2;
+            else
+                tripleBufferingIndex = 0;
         }
     }
 }
